@@ -5,6 +5,7 @@ import pino from 'pino'
 import { handleConnection } from './connection.js'
 import { processMessage } from './messageProcessor.js'
 import logger from '../pluggins/utils/logger.js'
+import { initGroq } from '../pluggins/ai/groq.js'
 
 export default class Bot {
   constructor(config) {
@@ -12,35 +13,60 @@ export default class Bot {
     this.sock = null
     this.msgRetryCounterCache = new NodeCache()
     this.logger = pino({ level: 'silent' })
+
+    // Inicializar Groq al crear el bot
+    if (config.apis?.groq) {
+      logger.info('Inicializando Groq AI...')
+      const initResult = initGroq(config.apis.groq)
+      if (initResult) {
+        logger.success('Groq AI inicializado correctamente')
+      } else {
+        logger.error('Error al inicializar Groq AI')
+      }
+    } else {
+      logger.warn('No hay API key para Groq configurada')
+    }
   }
 
   async start() {
-    const { state, saveCreds } = await useMultiFileAuthState(this.config.sessionDir)
-    const { version } = await fetchLatestBaileysVersion()
+    try {
+      const { state, saveCreds } = await useMultiFileAuthState(this.config.sessionDir)
+      const { version } = await fetchLatestBaileysVersion()
 
-    this.sock = makeWASocket({
-      version,
-      logger: this.logger,
-      printQRInTerminal: false,
-      auth: state,
-      browser: ['Chrome', 'Desktop', '20.0.04'],
-      markOnlineOnConnect: true,
-      msgRetryCounterCache: this.msgRetryCounterCache,
-      syncFullHistory: false,
-    })
+      logger.info(`Usando Baileys versión: ${version}`)
 
-    logger.info('Esperando conexión...')
+      this.sock = makeWASocket({
+        version,
+        logger: this.logger,
+        printQRInTerminal: false,
+        auth: state,
+        browser: ['Chrome', 'Desktop', '20.0.04'],
+        markOnlineOnConnect: true,
+        msgRetryCounterCache: this.msgRetryCounterCache,
+        syncFullHistory: false,
+      })
 
-    this.sock.ev.on('connection.update', (update) =>
-      handleConnection(update, this.sock, this.config, () => this.start())
-    )
+      logger.info('Esperando conexión...')
 
-    this.sock.ev.on('creds.update', saveCreds)
+      // Evento de conexión
+      this.sock.ev.on('connection.update', (update) =>
+        handleConnection(update, this.sock, this.config, () => this.start())
+      )
 
-    this.sock.ev.on('messages.upsert', async ({ messages }) => {
-      await processMessage(messages, this.sock, this.config)
-    })
+      // Guardar credenciales
+      this.sock.ev.on('creds.update', saveCreds)
 
-    return this.sock
+      // Procesar mensajes
+      this.sock.ev.on('messages.upsert', async ({ messages }) => {
+        await processMessage(messages, this.sock, this.config)
+      })
+
+      logger.success('Bot iniciado correctamente')
+      return this.sock
+
+    } catch (error) {
+      logger.error('Error al iniciar el bot:', error.message)
+      throw error
+    }
   }
 }

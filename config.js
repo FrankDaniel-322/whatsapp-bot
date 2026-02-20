@@ -5,7 +5,7 @@ import 'dotenv/config'
 export const config = {
   botName: 'El Psy Congro - Bot',
   ownerNumber: '51929416952',
-  ownerName: 'El Psy Congro',
+  ownerName: 'FrankDaniel',
   prefix: '.',
   sessionDir: 'auth_session',
 
@@ -15,7 +15,7 @@ export const config = {
   },
 
   apis: {
-    groq: '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',
+    groq: process.env.GROQ_API_KEY || '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',
   },
 
   mensajes: {
