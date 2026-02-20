@@ -34,6 +34,8 @@ export const config = {
         { cmd: 'ytsearch', desc: 'Busca en YouTube 🔍' },
         { cmd: 'voz', desc: 'Voz masculina (español) 🎤' },
         { cmd: 'ia', desc: 'Pregunta a IA 🤖' },
+        { cmd: 'memoria', desc: 'Ver historial con IA 📝' },
+        { cmd: 'limpiar', desc: 'Limpiar memoria de IA 🧹' },
         { cmd: 'iaauto', desc: 'Modo auto (solo owner) 🧠' },
         { cmd: 'add', desc: 'Añade miembro (admin) ➕' },
         { cmd: 'kick', desc: 'Elimina miembro (admin) 👋' },

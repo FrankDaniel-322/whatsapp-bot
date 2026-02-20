@@ -3,6 +3,27 @@ import Groq from 'groq-sdk'
 
 let groq = null
 
+// ============================================
+// 🧠 SISTEMA DE MEMORIA POR USUARIO
+// ============================================
+const memoriaConversacion = new Map() // Guarda el historial por usuario
+
+const MAX_HISTORIAL = 10 // Máximo de mensajes a recordar
+
+// Limpiar memoria vieja (opcional, cada 1 hora)
+setInterval(() => {
+  const ahora = Date.now()
+  for (const [userId, data] of memoriaConversacion) {
+    if (ahora - data.ultima > 3600000) { // 1 hora sin hablar
+      memoriaConversacion.delete(userId)
+      console.log(`🧹 Memoria limpiada para: ${userId}`)
+    }
+  }
+}, 3600000)
+
+// ============================================
+// 🎯 INICIALIZAR GROQ
+// ============================================
 export function initGroq(apiKey) {
   if (apiKey) {
     groq = new Groq({ apiKey })
@@ -12,12 +33,88 @@ export function initGroq(apiKey) {
   }
 }
 
-export default async function iaCommand({ sock, from, args, msg, config }) {
+// ============================================
+// 🎯 LIMPIAR MEMORIA MANUALMENTE (comando)
+// ============================================
+export async function limpiarMemoria(userId) {
+  if (memoriaConversacion.has(userId)) {
+    memoriaConversacion.delete(userId)
+    return true
+  }
+  return false
+}
+
+// ============================================
+// 🎯 OBTENER CONTEXTO DE CONVERSACIÓN
+// ============================================
+function obtenerContexto(userId, nuevoMensaje) {
+  // Obtener o crear historial del usuario
+  if (!memoriaConversacion.has(userId)) {
+    memoriaConversacion.set(userId, {
+      historial: [],
+      ultima: Date.now()
+    })
+  }
+
+  const userData = memoriaConversacion.get(userId)
+  userData.ultima = Date.now()
+
+  // Construir los mensajes para Groq
+  const messages = [
+    {
+      role: "system",
+      content: `Eres un amigo conversacional, relajado y juvenil. Hablas como un compa peruano/ español.
+
+      PERSONALIDAD:
+      • Respondes de manera natural, como si estuvieras chateando con un amigo
+      • Usas emojis de vez en cuando 😊 pero sin exagerar
+      • Eres cálido y amigable, pero no empalagoso
+      • Si no sabes algo, lo dices con honestidad y humor
+      • Mantienes el flow de la conversación
+      • Te adaptas al tono del usuario (si está serio, serio; si está bromista, bromista)
+      • IMPORTANTE: Recuerdas la conversación anterior y respondes en contexto
+
+      IDIOMA: Español peruano/neutro (usar "pues", "causa", "habla" de vez en cuando, pero natural)`
+    }
+  ]
+
+  // Agregar historial (últimos MAX_HISTORIAL mensajes)
+  const historialReciente = userData.historial.slice(-MAX_HISTORIAL)
+  for (const msg of historialReciente) {
+    messages.push(msg)
+  }
+
+  // Agregar el mensaje actual
+  messages.push({ role: "user", content: nuevoMensaje })
+
+  return { userData, messages }
+}
+
+// ============================================
+// 🎯 GUARDAR EN MEMORIA
+// ============================================
+function guardarEnMemoria(userData, pregunta, respuesta) {
+  // Guardar pregunta
+  userData.historial.push({ role: "user", content: pregunta })
+
+  // Guardar respuesta
+  userData.historial.push({ role: "assistant", content: respuesta })
+
+  // Limitar tamaño del historial
+  if (userData.historial.length > MAX_HISTORIAL * 2) {
+    userData.historial = userData.historial.slice(-MAX_HISTORIAL * 2)
+  }
+}
+
+// ============================================
+// 🎯 COMANDO PRINCIPAL .ia
+// ============================================
+export default async function iaCommand({ sock, from, args, msg, config, sender }) {
   const pregunta = args.join(' ')
 
   if (!pregunta) {
     await sock.sendMessage(from, {
-      text: '❌ Ejemplo: .ia cuál es la capital de Perú?'
+      text: '❌ Ejemplo: .ia hola, cómo estás?'
     })
     return true
   }
@@ -30,43 +127,37 @@ export default async function iaCommand({ sock, from, args, msg, config }) {
       if (config.apis?.groq) {
         initGroq(config.apis.groq)
       } else {
-        throw new Error('Groq no está configurado. Revisa tu API key en config.js')
+        throw new Error('Groq no está configurado')
       }
     }
 
-    // System prompt mejorado
-    const systemPrompt = `Eres un asistente amigable, juvenil y conversacional.
-    Respondes en español, de manera natural y con un tono relajado.
-    Usas emojis ocasionalmente para darle vida a la conversación 😊
-    Si la pregunta es técnica, das una respuesta clara pero no demasiado compleja.
-    Si no sabes algo, lo dices honestamente.
-    Idioma: Español (neutro, comprensible para todos).`
+    // Obtener contexto de conversación
+    const userId = sender || from
+    const { userData, messages } = obtenerContexto(userId, pregunta)
 
-    // Detectar si es pregunta técnica
-    const palabrasTecnicas = ['código', 'programar', 'programación', 'técnico', 'profesional', 'explicación']
-    const esTecnico = palabrasTecnicas.some(p => pregunta.toLowerCase().includes(p))
+    console.log(`🗣️ Usuario ${userId}: ${pregunta}`)
+    console.log(`📚 Historial: ${userData.historial.length} mensajes`)
 
-    const messages = [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: pregunta }
-    ]
-
-    console.log('🤖 Enviando a Groq:', pregunta)
-
+    // Enviar a Groq
     const chatCompletion = await groq.chat.completions.create({
       messages: messages,
       model: "llama-3.3-70b-versatile",
-      temperature: esTecnico ? 0.5 : 0.8,
-      max_tokens: esTecnico ? 1024 : 512
+      temperature: 0.8,
+      max_tokens: 512
     })
 
     let respuesta = chatCompletion.choices[0]?.message?.content
 
     if (!respuesta) {
-      throw new Error('No se obtuvo respuesta de Groq')
+      throw new Error('No se obtuvo respuesta')
     }
 
-    // Limitar longitud para WhatsApp
+    // Guardar en memoria
+    guardarEnMemoria(userData, pregunta, respuesta)
+
+    console.log(`🤖 IA: ${respuesta.substring(0, 50)}...`)
+
+    // Limitar longitud
     if (respuesta.length > 4000) {
       respuesta = respuesta.substring(0, 4000) + '...\n\n(Respuesta acortada)'
     }
@@ -78,18 +169,13 @@ export default async function iaCommand({ sock, from, args, msg, config }) {
   } catch (e) {
     console.log('Error IA:', e)
 
-    // Mensajes de error más amigables
     if (e.message.includes('API key')) {
       await sock.sendMessage(from, {
-        text: '❌ Error de configuración: La API key de Groq no es válida. Revisa tu archivo .env'
-      })
-    } else if (e.message.includes('rate limit')) {
-      await sock.sendMessage(from, {
-        text: '⏳ Muchas peticiones a la vez. Espera un momento y vuelve a intentar.'
+        text: '❌ Error con la API key de Groq'
       })
     } else {
       await sock.sendMessage(from, {
-        text: '❌ Error con la IA. Intenta de nuevo en unos segundos.'
+        text: '❌ Error con la IA. Intenta de nuevo.'
       })
     }
   }
